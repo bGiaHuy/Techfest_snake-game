@@ -168,23 +168,35 @@ class GestureController:
                         pt = (int(lm.x * w), int(lm.y * h))
                         cv2.circle(rgb_frame, pt, 4, (112, 0, 255), -1)
 
-                    # Extract WRIST (0) and INDEX_FINGER_TIP (8)
+                    # Extract relevant landmarks for scale-invariant pointing calculation
                     wrist = hand_landmarks[0]
+                    index_mcp = hand_landmarks[5]
                     index_tip = hand_landmarks[8]
+                    middle_mcp = hand_landmarks[9]
 
-                    # Displacement vector
-                    dx = index_tip.x - wrist.x
-                    dy = index_tip.y - wrist.y
-                    distance = (dx**2 + dy**2)**0.5
+                    # Displacement vector from index knuckle to finger tip
+                    dx = index_tip.x - index_mcp.x
+                    dy = index_tip.y - index_mcp.y
+                    finger_len = (dx**2 + dy**2)**0.5
+                    
+                    # Calculate hand size (wrist to middle knuckle) for scale invariance
+                    hand_size = ((middle_mcp.x - wrist.x)**2 + (middle_mcp.y - wrist.y)**2)**0.5
+                    ratio = finger_len / max(0.01, hand_size)
 
-                    # Only register direction if hand displacement exceeds threshold
-                    if distance >= GESTURE_THRESHOLD:
+                    # Draw index finger vector with a bold amber glow
+                    mcp_pt = (int(index_mcp.x * w), int(index_mcp.y * h))
+                    tip_pt = (int(index_tip.x * w), int(index_tip.y * h))
+                    cv2.line(rgb_frame, mcp_pt, tip_pt, (255, 170, 0), 4)
+
+                    # Only register direction if index finger is extended (ratio >= 0.45)
+                    if ratio >= 0.45:
                         if abs(dx) > abs(dy):
                             # Horizontal movement
                             detected_dir = (1, 0) if dx > 0 else (-1, 0)
                         else:
                             # Vertical movement
                             detected_dir = (0, 1) if dy > 0 else (0, -1)
+
 
             # 4. Save results thread-safely
             with self.lock:
