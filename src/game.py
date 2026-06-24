@@ -15,7 +15,7 @@ from src.snake import Snake
 from src.food import Food
 from src.menu import Menu
 from src.gesture_controller import GestureController
-from src.auto_player import find_shortest_path, get_survival_move
+from src.auto_player import get_ai_move
 
 # Game State Constants
 STATE_MENU = 0
@@ -245,39 +245,19 @@ class Game:
                 # In Auto AI Mode, run pathfinding before moving
                 if self.mode == MODE_AUTO:
                     head = self.snake.body[0]
-                    # BFS Pathfinding
-                    path = find_shortest_path(head, self.food.position, self.snake.body)
-                    self.current_path = path if path else []
-                    
-                    if path and len(path) > 1:
-                        # Follow the next cell in path
-                        next_cell = path[1]
-                        dx = next_cell[0] - head[0]
-                        dy = next_cell[1] - head[1]
-                        self.snake.set_direction((dx, dy))
-                    else:
-                        # Fallback survival flood-fill movement
-                        survival_dir = get_survival_move(head, self.snake.body)
-                        if survival_dir:
-                            self.snake.set_direction(survival_dir)
-                        # If no survival move is possible, let the snake collide
+                    ai_dir, path = get_ai_move(head, self.food.position, self.snake.body)
+                    self.current_path = path
+                    self.snake.set_direction(ai_dir)
+                
+                # In Gesture Mode, support AI assist when user stops pointing
                 elif self.mode == MODE_GESTURE:
                     active_gesture = self.gesture_controller.get_direction()
                     if active_gesture is None:
-                        # AI Assist Takeover
+                        # AI Assist Takeover using smart pathfinder
                         head = self.snake.body[0]
-                        path = find_shortest_path(head, self.food.position, self.snake.body)
-                        self.current_path = path if path else []
-                        
-                        if path and len(path) > 1:
-                            next_cell = path[1]
-                            dx = next_cell[0] - head[0]
-                            dy = next_cell[1] - head[1]
-                            self.snake.set_direction((dx, dy))
-                        else:
-                            survival_dir = get_survival_move(head, self.snake.body)
-                            if survival_dir:
-                                self.snake.set_direction(survival_dir)
+                        ai_dir, path = get_ai_move(head, self.food.position, self.snake.body)
+                        self.current_path = path
+                        self.snake.set_direction(ai_dir)
                     else:
                         # Clear path overlay when user is actively controlling
                         self.current_path = []
