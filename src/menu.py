@@ -52,10 +52,11 @@ class Menu:
         start_x = (WINDOW_WIDTH - btn_w) // 2
         
         self.buttons = [
-            Button(start_x, 300, btn_w, btn_h, "1. Keyboard Control (Normal)", MODE_KEYBOARD),
-            Button(start_x, 370, btn_w, btn_h, "2. Gesture Control (Webcam)", MODE_GESTURE),
-            Button(start_x, 440, btn_w, btn_h, "3. AI Autoplay (BFS Solver)", MODE_AUTO),
-            Button(start_x, 520, btn_w, btn_h, "Exit Game", -1, is_accent=True)
+            Button(start_x, 260, btn_w, btn_h, "1. Keyboard Control (Normal)", MODE_KEYBOARD),
+            Button(start_x, 320, btn_w, btn_h, "2. Gesture Control (Webcam)", MODE_GESTURE),
+            Button(start_x, 380, btn_w, btn_h, "3. AI Autoplay (BFS Solver)", MODE_AUTO),
+            Button(start_x, 440, btn_w, btn_h, "4. Speed: Normal (1x)", 100),
+            Button(start_x, 510, btn_w, btn_h, "Exit Game", -1, is_accent=True)
         ]
         
     def draw_main_menu(self, screen):
@@ -95,7 +96,7 @@ class Menu:
         screen.blit(sub_surf, sub_rect)
         
         # Draw controls hint
-        hint_text = "Select a mode below or press corresponding key [1, 2, 3]"
+        hint_text = "Select a mode below or press corresponding key [1, 2, 3, 4]"
         hint_surf = self.body_font.render(hint_text, True, COLOR_TEXT_SECONDARY)
         hint_rect = hint_surf.get_rect(center=(WINDOW_WIDTH // 2, panel_y + 180))
         screen.blit(hint_surf, hint_rect)
@@ -113,6 +114,13 @@ class Menu:
             if btn.rect.collidepoint(pos):
                 return btn.value
         return None
+
+    def update_speed_button_text(self, new_text):
+        """Updates the text of the speed button."""
+        for btn in self.buttons:
+            if btn.value == 100:
+                btn.text = new_text
+                break
 
     def draw_game_over(self, screen, score, high_score, time_left, max_time=5.0):
         """

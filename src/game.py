@@ -41,6 +41,7 @@ class Game:
         
         # Timing (decouple rendering FPS from snake movement speed)
         self.last_update_time = pygame.time.get_ticks()
+        self.speed_multiplier = 1  # 1 = Normal, 2 = Fast, 5 = Turbo, 10 = Insane
         self.snake_update_delay = 100  # ms (10 updates per second)
         
         # High Score file
@@ -120,6 +121,8 @@ class Game:
                         self.start_game(MODE_GESTURE)
                     elif event.key in [pygame.K_3, pygame.K_KP3]:
                         self.start_game(MODE_AUTO)
+                    elif event.key in [pygame.K_4, pygame.K_KP4, pygame.K_s]:
+                        self.cycle_speed()
                         
                 elif self.state == STATE_PLAYING and self.mode == MODE_KEYBOARD:
                     # Key directions for keyboard control mode
@@ -138,6 +141,8 @@ class Game:
                     if clicked_val is not None:
                         if clicked_val == -1:
                             return False  # Exit
+                        elif clicked_val == 100:
+                            self.cycle_speed()
                         else:
                             self.start_game(clicked_val)
                             
@@ -158,6 +163,20 @@ class Game:
             
         self.state = STATE_PLAYING
         self.last_update_time = pygame.time.get_ticks()
+
+    def cycle_speed(self):
+        """Cycles through game speed settings (1x, 2x, 5x, 10x)."""
+        speeds = {
+            1: (2, "Fast (2x)", 50),
+            2: (5, "Turbo (5x)", 20),
+            5: (10, "Insane (10x)", 10),
+            10: (1, "Normal (1x)", 100)
+        }
+        next_mult, label, delay = speeds.get(self.speed_multiplier, (1, "Normal (1x)", 100))
+        self.speed_multiplier = next_mult
+        self.snake_update_delay = delay
+        # Update menu button text
+        self.menu.update_speed_button_text(f"4. Speed: {label}")
 
     def trigger_game_over(self):
         """Sets state to game over and records the start timestamp."""
