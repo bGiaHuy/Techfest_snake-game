@@ -165,16 +165,52 @@ class Game:
         self.last_update_time = pygame.time.get_ticks()
 
     def cycle_speed(self):
-        """Cycles through game speed settings (1x, 2x, 5x, 10x)."""
-        speeds = {
-            1: (2, "Fast (2x)", 50),
-            2: (5, "Turbo (5x)", 20),
-            5: (10, "Insane (10x)", 10),
-            10: (1, "Normal (1x)", 100)
-        }
-        next_mult, label, delay = speeds.get(self.speed_multiplier, (1, "Normal (1x)", 100))
-        self.speed_multiplier = next_mult
-        self.snake_update_delay = delay
+        """Cycles through game speed settings (1x, 2x, 5x, 10x, Custom)."""
+        if self.speed_multiplier == 10:
+            # Transition to Custom Speed input
+            import tkinter as tk
+            from tkinter import simpledialog
+            
+            # Hide the main tkinter root window
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)  # Make it stay on top
+            
+            try:
+                # Ask user for a custom speed multiplier
+                custom_mult = simpledialog.askfloat(
+                    "Custom Speed", 
+                    "Enter speed multiplier (e.g. 1 to 50):\n(1x = Normal, 10x = Insane)", 
+                    minvalue=0.1, 
+                    maxvalue=100.0
+                )
+                if custom_mult is not None:
+                    self.speed_multiplier = custom_mult
+                    # 100ms divided by speed multiplier, clamped to at least 1ms delay
+                    self.snake_update_delay = max(1, int(100 / custom_mult))
+                    label = f"Custom ({custom_mult}x)"
+                else:
+                    # Cancelled, fallback to Normal
+                    self.speed_multiplier = 1
+                    self.snake_update_delay = 100
+                    label = "Normal (1x)"
+            except Exception:
+                # Fallback if tkinter fails
+                self.speed_multiplier = 1
+                self.snake_update_delay = 100
+                label = "Normal (1x)"
+            finally:
+                root.destroy()
+        else:
+            speeds = {
+                1: (2, "Fast (2x)", 50),
+                2: (5, "Turbo (5x)", 20),
+                5: (10, "Insane (10x)", 10),
+            }
+            next_mult, label, delay = speeds.get(self.speed_multiplier, (1, "Normal (1x)", 100))
+            self.speed_multiplier = next_mult
+            self.snake_update_delay = delay
+            
         # Update menu button text
         self.menu.update_speed_button_text(f"4. Speed: {label}")
 
