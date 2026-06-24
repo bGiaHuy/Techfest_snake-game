@@ -1,21 +1,46 @@
 from collections import deque
 from src.config import GRID_COLS, GRID_ROWS
 
+# Generate a fixed Hamiltonian Cycle for the 28x28 grid
+def _generate_hamiltonian_cycle(cols, rows):
+    cycle = []
+    # Go down Column 0
+    for y in range(rows):
+        cycle.append((0, y))
+        
+    # Serpentine for columns 1 to cols-1
+    for x in range(1, cols):
+        if x % 2 == 1:
+            # Odd columns go UP (from rows-1 down to 1)
+            for y in reversed(range(1, rows)):
+                cycle.append((x, y))
+        else:
+            # Even columns go DOWN (from 1 up to rows-1)
+            for y in range(1, rows):
+                cycle.append((x, y))
+                
+    # Go left along row 0 back to (0,0)
+    for x in reversed(range(1, cols)):
+        cycle.append((x, 0))
+        
+    return cycle
+
+HAMILTONIAN_CYCLE = _generate_hamiltonian_cycle(GRID_COLS, GRID_ROWS)
+# Map pos -> index in cycle
+CYCLE_INDEX = {pos: idx for idx, pos in enumerate(HAMILTONIAN_CYCLE)}
+V_SIZE = len(HAMILTONIAN_CYCLE)
+
 def get_valid_neighbors(pos, snake_body):
     """
     Returns a list of valid, unblocked grid positions adjacent to the given position.
     """
     x, y = pos
     neighbors = []
-    # Up, Down, Left, Right
     directions = [(0, -1), (0, 1), (-1, 0), (1, 0)]
     
     for dx, dy in directions:
         nx, ny = x + dx, y + dy
         if 0 <= nx < GRID_COLS and 0 <= ny < GRID_ROWS:
-            # Exclude body segments as obstacles. The tail segment moves out of the way
-            # unless the snake grows, so we exclude snake_body[-1] when it's not eating.
-            # To be safe, we treat all body segments except the last one as obstacles.
             if (nx, ny) not in snake_body[:-1]:
                 neighbors.append((nx, ny))
                 
@@ -33,7 +58,6 @@ def find_shortest_path(start, target, snake_body):
     queue = deque([[start]])
     visited = {start}
     
-    # Treat body segments as obstacles, excluding the tail segment since it will move
     body_set = set(snake_body[:-1])
     
     while queue:
@@ -86,11 +110,9 @@ def is_path_safe(snake_body, path_to_food):
     virtual_body = list(snake_body)
     for step in path_to_food[1:]:
         virtual_body.insert(0, step)
-        # Only pop if we are not at the final step (eating the food)
         if step != path_to_food[-1]:
             virtual_body.pop()
             
-    # Check if there is a path from the new head to the new tail in the simulated state
     tail_path = find_shortest_path(virtual_body[0], virtual_body[-1], virtual_body)
     return tail_path is not None
 
@@ -107,10 +129,7 @@ def follow_tail_move(head, snake_body):
     max_space = -1
     
     for neighbor in valid_neighbors:
-        # Simulate moving to this neighbor (since it is not food, tail moves)
         virtual_body = [neighbor] + snake_body[:-1]
-        
-        # Check if the neighbor can reach the tail
         path_to_tail = find_shortest_path(neighbor, virtual_body[-1], virtual_body)
         if path_to_tail is not None:
             space = count_reachable_cells(neighbor, virtual_body)
@@ -169,17 +188,37 @@ def get_ai_move(head, food_pos, snake_body):
             dy = next_cell[1] - head[1]
             return (dx, dy), path_to_food
             
-    # 2. If no safe path to food, follow the tail defensively
+    # 2. Fallback 1: Follow the Hamiltonian Cycle
+    if head in CYCLE_INDEX:
+        h_idx = CYCLE_INDEX[head]
+        next_cell = HAMILTONIAN_CYCLE[(h_idx + 1) % V_SIZE]
+        
+        # Verify that the next cell along the cycle is safe and is adjacent
+        if next_cell not in snake_body[:-1]:
+            dx = next_cell[0] - head[0]
+            dy = next_cell[1] - head[1]
+            
+            # Trace the cycle path from head to food for drawing (max 50 cells)
+            f_idx = CYCLE_INDEX.get(food_pos, 0)
+            path_cycle = []
+            curr_idx = h_idx
+            for _ in range(min(50, (f_idx - curr_idx) % V_SIZE + 1)):
+                path_cycle.append(HAMILTONIAN_CYCLE[curr_idx])
+                curr_idx = (curr_idx + 1) % V_SIZE
+            return (dx, dy), path_cycle
+            
+    # 3. Fallback 2: Follow the tail defensively
     tail_move = follow_tail_move(head, snake_body)
     if tail_move:
         path_to_tail = find_shortest_path(head, snake_body[-1], snake_body)
         return tail_move, (path_to_tail if path_to_tail else [])
         
-    # 3. Fallback: survive by picking the direction with the most space
+    # 4. Fallback 3: survive by picking the direction with the most space
     survival_move = get_survival_move(head, snake_body)
     if survival_move:
         return survival_move, []
         
-    # 4. No safe move (r.i.p)
+    # 5. No safe move (r.i.p)
     return (0, 0), []
+
 
