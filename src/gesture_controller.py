@@ -200,8 +200,7 @@ class GestureController:
 
             # 4. Save results thread-safely
             with self.lock:
-                if detected_dir:
-                    self.current_direction = detected_dir
+                self.current_direction = detected_dir
                 
                 # Resize using OpenCV which is faster
                 resized_rgb = cv2.resize(rgb_frame, (WEBCAM_PREVIEW_WIDTH, WEBCAM_PREVIEW_HEIGHT))

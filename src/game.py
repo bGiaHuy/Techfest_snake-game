@@ -206,6 +206,26 @@ class Game:
                         if survival_dir:
                             self.snake.set_direction(survival_dir)
                         # If no survival move is possible, let the snake collide
+                elif self.mode == MODE_GESTURE:
+                    active_gesture = self.gesture_controller.get_direction()
+                    if active_gesture is None:
+                        # AI Assist Takeover
+                        head = self.snake.body[0]
+                        path = find_shortest_path(head, self.food.position, self.snake.body)
+                        self.current_path = path if path else []
+                        
+                        if path and len(path) > 1:
+                            next_cell = path[1]
+                            dx = next_cell[0] - head[0]
+                            dy = next_cell[1] - head[1]
+                            self.snake.set_direction((dx, dy))
+                        else:
+                            survival_dir = get_survival_move(head, self.snake.body)
+                            if survival_dir:
+                                self.snake.set_direction(survival_dir)
+                    else:
+                        # Clear path overlay when user is actively controlling
+                        self.current_path = []
                 
                 # Check if snake will eat food
                 next_head = (
@@ -245,8 +265,8 @@ class Game:
             self.draw_game_board()
             self.draw_sidebar()
             
-            # Draw Path Overlay (Auto Mode only)
-            if self.mode == MODE_AUTO and self.state == STATE_PLAYING:
+            # Draw Path Overlay
+            if self.state == STATE_PLAYING:
                 self.draw_path_overlay()
                 
             # Draw Entities
@@ -424,7 +444,7 @@ class Game:
         
         guide_texts = {
             MODE_KEYBOARD: ["- [Arrow Keys] or [WASD]", "  to change direction", "- [ESC] to return to menu"],
-            MODE_GESTURE: ["- Hold index finger up", "  down, left, or right", "- [ESC] to return to menu"],
+            MODE_GESTURE: ["- Point index finger to steer", "- AI Assist takes over when", "  no hand/pointing is active", "- [ESC] to return to menu"],
             MODE_AUTO: ["- Bot playing automatically", "- Uses Breadth-First Search", "- [ESC] to return to menu"]
         }
         
