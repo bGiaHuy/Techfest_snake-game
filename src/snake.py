@@ -53,7 +53,7 @@ class Snake:
             return True
             
         # Self collision check
-        if self.body[0] in self.body[1:]:
+        if self.body[0] in set(self.body[1:]):
             return True
             
         return False

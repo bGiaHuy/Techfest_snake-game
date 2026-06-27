@@ -47,6 +47,15 @@ class Menu:
         self.subtitle_font = get_font(FONT_SIZE_SUBTITLE)
         self.body_font = get_font(FONT_SIZE_BODY)
         
+        # Audio
+        try:
+            from src.config import generate_beep
+            self.snd_hover = generate_beep(660, 50, 0.1)
+        except Exception:
+            self.snd_hover = None
+            
+        self.last_hovered_btn = None
+        
         # Setup buttons
         btn_w, btn_h = 320, 50
         start_x = (WINDOW_WIDTH - btn_w) // 2
@@ -54,12 +63,12 @@ class Menu:
         self.buttons = [
             Button(start_x, 260, btn_w, btn_h, "1. Keyboard Control (Normal)", MODE_KEYBOARD),
             Button(start_x, 320, btn_w, btn_h, "2. Gesture Control (Webcam)", MODE_GESTURE),
-            Button(start_x, 380, btn_w, btn_h, "3. AI Autoplay (BFS Solver)", MODE_AUTO),
+            Button(start_x, 380, btn_w, btn_h, "3. AI Autoplay (A* + Hamiltonian)", MODE_AUTO),
             Button(start_x, 440, btn_w, btn_h, "4. Speed: Normal (1x)", 100),
             Button(start_x, 510, btn_w, btn_h, "Exit Game", -1, is_accent=True)
         ]
         
-    def draw_main_menu(self, screen):
+    def draw_main_menu(self, screen, mouse_pos):
         """
         Draws the main menu with a beautiful glassmorphism panel and gradient titles.
         """
@@ -101,10 +110,17 @@ class Menu:
         hint_rect = hint_surf.get_rect(center=(WINDOW_WIDTH // 2, panel_y + 180))
         screen.blit(hint_surf, hint_rect)
         
-        # Draw Buttons
-        mouse_pos = pygame.mouse.get_pos()
+        # Buttons
+        hovered_any = None
         for btn in self.buttons:
-            btn.draw(screen, mouse_pos, self.body_font)
+            is_hovered = btn.draw(screen, mouse_pos, self.body_font)
+            if is_hovered:
+                hovered_any = btn
+                
+        if hovered_any != self.last_hovered_btn:
+            if hovered_any and self.snd_hover:
+                self.snd_hover.play()
+            self.last_hovered_btn = hovered_any
             
     def handle_click(self, pos):
         """
@@ -122,9 +138,9 @@ class Menu:
                 btn.text = new_text
                 break
 
-    def draw_game_over(self, screen, score, high_score, time_left, max_time=5.0):
+    def draw_game_over(self, screen, score, high_score, time_left, max_time=5.0, mouse_pos=(0, 0)):
         """
-        Draws a semi-transparent game over overlay with a spinning countdown ring.
+        Draws a semi-transparent game over overlay with a spinning countdown ring and Play Again button.
         """
         # Create a semi-transparent surface for glassmorphism overlay
         overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
@@ -132,7 +148,7 @@ class Menu:
         screen.blit(overlay, (0, 0))
         
         # Central card
-        card_w, card_h = 440, 360
+        card_w, card_h = 440, 420
         card_x = (WINDOW_WIDTH - card_w) // 2
         card_y = (WINDOW_HEIGHT - card_h) // 2
         card_rect = pygame.Rect(card_x, card_y, card_w, card_h)
@@ -161,7 +177,7 @@ class Menu:
         percent = time_left / max_time
         
         # Draw circular countdown ring
-        ring_center = (WINDOW_WIDTH // 2, card_y + 250)
+        ring_center = (WINDOW_WIDTH // 2, card_y + 240)
         ring_radius = 36
         ring_rect = pygame.Rect(ring_center[0] - ring_radius, ring_center[1] - ring_radius, ring_radius * 2, ring_radius * 2)
         
@@ -169,8 +185,6 @@ class Menu:
         pygame.draw.circle(screen, (40, 48, 70), ring_center, ring_radius, width=4)
         
         # Active countdown arc (neon cyan)
-        # Angles are in radians. 0 is pointing right, positive is clockwise in Pygame's draw.arc.
-        # We want it to decrease counterclockwise.
         start_angle = -math.pi / 2
         end_angle = start_angle + (2 * math.pi * percent)
         
@@ -185,6 +199,31 @@ class Menu:
         screen.blit(sec_surf, sec_rect)
         
         # Text instructions below ring
-        prompt_surf = self.body_font.render("Returning to menu...", True, COLOR_TEXT_SECONDARY)
-        prompt_rect = prompt_surf.get_rect(center=(WINDOW_WIDTH // 2, card_y + 315))
+        prompt_surf = self.body_font.render("Restarting game...", True, COLOR_TEXT_SECONDARY)
+        prompt_rect = prompt_surf.get_rect(center=(WINDOW_WIDTH // 2, card_y + 300))
         screen.blit(prompt_surf, prompt_rect)
+
+        # Draw Play Again button
+        if not hasattr(self, 'play_again_btn'):
+            self.play_again_btn = Button(0, 0, 260, 45, "Play Again (Enter)", 1, is_accent=True)
+            
+        self.play_again_btn.rect.centerx = WINDOW_WIDTH // 2
+        self.play_again_btn.rect.y = card_y + 340
+        is_hovered = self.play_again_btn.draw(screen, mouse_pos, self.body_font)
+        
+        if is_hovered:
+            if self.last_hovered_btn != self.play_again_btn:
+                if self.snd_hover:
+                    self.snd_hover.play()
+                self.last_hovered_btn = self.play_again_btn
+        else:
+            if self.last_hovered_btn == self.play_again_btn:
+                self.last_hovered_btn = None
+
+    def handle_game_over_click(self, pos):
+        """
+        Returns True if the 'Play Again' button is clicked.
+        """
+        if hasattr(self, 'play_again_btn') and self.play_again_btn.rect.collidepoint(pos):
+            return True
+        return False

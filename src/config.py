@@ -4,6 +4,10 @@ import pygame
 WINDOW_WIDTH = 1024
 WINDOW_HEIGHT = 768
 FPS = 10  # Classic snake speed (10 steps per second)
+RENDER_FPS = 60
+SPEED_DECAY_FACTOR = 0.98
+MIN_UPDATE_DELAY = 20
+FINGER_EXTEND_RATIO = 0.45
 
 # Grid settings
 CELL_SIZE = 24
@@ -58,4 +62,27 @@ def get_font(size, bold=False):
         return pygame.font.SysFont(FONT_FAMILY, size, bold=bold)
     except Exception:
         return pygame.font.Font(None, size)
+
+def generate_beep(frequency, duration_ms, volume=0.5):
+    try:
+        import numpy as np
+        sample_rate = 44100
+        n_samples = int(round(duration_ms * sample_rate / 1000))
+        t = np.linspace(0, duration_ms / 1000, n_samples, False)
+        wave = np.sin(frequency * t * 2 * np.pi)
+        
+        fade_samples = int(sample_rate * 0.01)
+        if fade_samples > 0 and n_samples > fade_samples:
+            fade_in = np.linspace(0, 1, fade_samples)
+            fade_out = np.linspace(1, 0, fade_samples)
+            wave[:fade_samples] *= fade_in
+            wave[-fade_samples:] *= fade_out
+            
+        audio = (wave * volume * 32767).astype(np.int16)
+        stereo = np.column_stack((audio, audio))
+        return pygame.sndarray.make_sound(stereo)
+    except Exception:
+        # Fallback dummy sound if numpy not available
+        return pygame.mixer.Sound(buffer=bytearray(10))
+
 

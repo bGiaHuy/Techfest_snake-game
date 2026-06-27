@@ -1,5 +1,6 @@
 import os
 import time
+import random
 import pygame
 from src.config import (
     WINDOW_WIDTH, WINDOW_HEIGHT, FPS,
@@ -9,7 +10,8 @@ from src.config import (
     COLOR_BG, COLOR_SIDEBAR_BG, COLOR_GRID_LINE, COLOR_PATH, COLOR_PATH_ALPHA,
     COLOR_TEXT_PRIMARY, COLOR_TEXT_SECONDARY, COLOR_ACCENT, COLOR_BORDER, COLOR_SNAKE_HEAD,
     FONT_FAMILY, FONT_SIZE_TITLE, FONT_SIZE_SUBTITLE, FONT_SIZE_BODY, FONT_SIZE_SMALL,
-    MODE_KEYBOARD, MODE_GESTURE, MODE_AUTO, get_font
+    MODE_KEYBOARD, MODE_GESTURE, MODE_AUTO, get_font,
+    RENDER_FPS, SPEED_DECAY_FACTOR, MIN_UPDATE_DELAY
 )
 from src.snake import Snake
 from src.food import Food
@@ -21,12 +23,18 @@ from src.auto_player import get_ai_move
 STATE_MENU = 0
 STATE_PLAYING = 1
 STATE_GAMEOVER = 2
+STATE_PAUSED = 3
+STATE_DYING = 4
+STATE_SPEED_INPUT = 5
 
 class Game:
     def __init__(self):
         pygame.init()
         pygame.display.set_caption("Snake Vision AI & Autoplay")
-        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+        # Create the actual resizable window without SCALED (so we can manually stretch it)
+        self.real_screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.RESIZABLE)
+        # Create a logical surface where all game graphics are drawn
+        self.screen = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
         self.clock = pygame.time.Clock()
         
         # Core game objects
@@ -42,7 +50,8 @@ class Game:
         # Timing (decouple rendering FPS from snake movement speed)
         self.last_update_time = pygame.time.get_ticks()
         self.speed_multiplier = 1  # 1 = Normal, 2 = Fast, 5 = Turbo, 10 = Insane
-        self.snake_update_delay = 100  # ms (10 updates per second)
+        self.base_update_delay = 100  # ms (10 updates per second)
+        self.current_update_delay = 100
         
         # High Score file
         self.highscore_file = "highscore.txt"
@@ -55,10 +64,25 @@ class Game:
         # Track path list for Auto mode path visualization
         self.current_path = []
         
+        # Cache overlay surface for performance
+        self.overlay_surf = pygame.Surface((GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE), pygame.SRCALPHA)
+        self.particles = []
+        
+        # Scaling cache
+        self.cached_size = None
+        self.cached_scale_params = None
+        
         # Load fonts for sidebar
         self.sidebar_title_font = get_font(FONT_SIZE_SUBTITLE, bold=True)
         self.sidebar_body_font = get_font(FONT_SIZE_BODY)
         self.sidebar_small_font = get_font(FONT_SIZE_SMALL)
+        
+        # Initialize sound
+        pygame.mixer.init()
+        from src.config import generate_beep
+        self.snd_eat = generate_beep(880, 100, 0.2)
+        self.snd_die = generate_beep(220, 500, 0.3)
+        self.custom_speed_str = ""
 
     def load_high_score(self):
         """Loads high score from local file."""
@@ -79,7 +103,7 @@ class Game:
             pass
 
     def run(self):
-        """Main game loop executing at 60 FPS."""
+        """Main game loop executing at RENDER_FPS."""
         running = True
         while running:
             # Handle Pygame system events
@@ -91,8 +115,11 @@ class Game:
             # Draw graphics
             self.draw()
             
-            # Limit loop rate (run at smooth 60fps for animations and webcam preview)
-            self.clock.tick(60)
+            # Control rendering frame rate
+            pygame.display.flip()
+            
+            # Control rendering frame rate
+            self.clock.tick(RENDER_FPS)
             
         # Clean shutdown
         self.gesture_controller.stop()
@@ -105,16 +132,40 @@ class Game:
                 return False
                 
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    if self.state != STATE_MENU:
-                        # Return to menu
-                        self.gesture_controller.stop()
+                if event.key == pygame.K_F11:
+                    pygame.display.toggle_fullscreen()
+                elif event.key == pygame.K_ESCAPE:
+                    if self.state in [STATE_PLAYING, STATE_GAMEOVER, STATE_PAUSED, STATE_DYING]:
                         self.state = STATE_MENU
+                        self.gesture_controller.stop()
+                    elif self.state == STATE_SPEED_INPUT:
+                        self.state = STATE_MENU
+                        self.speed_multiplier = 1
+                        self.base_update_delay = 100
+                        self.menu.update_speed_button_text("4. Speed: Normal (1x)")
                     else:
                         return False
                         
-                # Quick key shortcuts for menu
-                if self.state == STATE_MENU:
+                elif self.state == STATE_SPEED_INPUT:
+                    if event.key in [pygame.K_RETURN, pygame.K_KP_ENTER]:
+                        try:
+                            custom_mult = float(self.custom_speed_str)
+                            if custom_mult > 0:
+                                self.speed_multiplier = custom_mult
+                                self.base_update_delay = max(1, int(100 / custom_mult))
+                                self.menu.update_speed_button_text(f"4. Speed: Custom ({custom_mult}x)")
+                        except ValueError:
+                            self.speed_multiplier = 1
+                            self.base_update_delay = 100
+                            self.menu.update_speed_button_text("4. Speed: Normal (1x)")
+                        self.state = STATE_MENU
+                    elif event.key == pygame.K_BACKSPACE:
+                        self.custom_speed_str = self.custom_speed_str[:-1]
+                    else:
+                        if event.unicode.isdigit() or event.unicode == '.':
+                            self.custom_speed_str += event.unicode
+                            
+                elif self.state == STATE_MENU:
                     if event.key in [pygame.K_1, pygame.K_KP1]:
                         self.start_game(MODE_KEYBOARD)
                     elif event.key in [pygame.K_2, pygame.K_KP2]:
@@ -135,9 +186,21 @@ class Game:
                     elif event.key in [pygame.K_RIGHT, pygame.K_d]:
                         self.snake.set_direction((1, 0))
                         
+                    elif event.key in [pygame.K_p, pygame.K_SPACE]:
+                        self.state = STATE_PAUSED
+                        
+                elif self.state == STATE_PAUSED:
+                    if event.key in [pygame.K_p, pygame.K_SPACE]:
+                        self.state = STATE_PLAYING
+                        
+                elif self.state == STATE_GAMEOVER:
+                    if event.key in [pygame.K_RETURN, pygame.K_KP_ENTER]:
+                        self.start_game(self.mode)
+                        
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                logical_pos = self.get_logical_mouse_pos(event.pos)
                 if self.state == STATE_MENU:
-                    clicked_val = self.menu.handle_click(event.pos)
+                    clicked_val = self.menu.handle_click(logical_pos)
                     if clicked_val is not None:
                         if clicked_val == -1:
                             return False  # Exit
@@ -146,7 +209,34 @@ class Game:
                         else:
                             self.start_game(clicked_val)
                             
+                elif self.state == STATE_GAMEOVER:
+                    if self.menu.handle_game_over_click(logical_pos):
+                        self.start_game(self.mode)
+                            
         return True
+
+    def _update_scale_params(self):
+        rw, rh = self.real_screen.get_size()
+        if self.cached_size != (rw, rh):
+            self.cached_size = (rw, rh)
+            lw, lh = WINDOW_WIDTH, WINDOW_HEIGHT
+            scale = min(rw / lw, rh / lh)
+            scaled_w = int(lw * scale)
+            scaled_h = int(lh * scale)
+            offset_x = (rw - scaled_w) // 2
+            offset_y = (rh - scaled_h) // 2
+            self.cached_scale_params = (scale, scaled_w, scaled_h, offset_x, offset_y)
+
+    def get_logical_mouse_pos(self, raw_pos):
+        """Translates physical window coordinates to logical 1024x768 coordinates."""
+        self._update_scale_params()
+        scale, scaled_w, scaled_h, offset_x, offset_y = self.cached_scale_params
+        
+        # Reverse map the coordinates
+        x = (raw_pos[0] - offset_x) / scale
+        y = (raw_pos[1] - offset_y) / scale
+        
+        return (int(x), int(y))
 
     def start_game(self, mode):
         """Initializes game objects and switches states."""
@@ -154,6 +244,8 @@ class Game:
         self.snake.reset()
         self.food.randomize_position(self.snake.body)
         self.current_path = []
+        self.particles = []
+        self.current_update_delay = self.base_update_delay
         
         # Start/Stop webcam depending on mode
         if self.mode == MODE_GESTURE:
@@ -168,39 +260,8 @@ class Game:
         """Cycles through game speed settings (1x, 2x, 5x, 10x, Custom)."""
         if self.speed_multiplier == 10:
             # Transition to Custom Speed input
-            import tkinter as tk
-            from tkinter import simpledialog
-            
-            # Hide the main tkinter root window
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes("-topmost", True)  # Make it stay on top
-            
-            try:
-                # Ask user for a custom speed multiplier
-                custom_mult = simpledialog.askfloat(
-                    "Custom Speed", 
-                    "Enter speed multiplier (e.g. 1 to 50):\n(1x = Normal, 10x = Insane)", 
-                    minvalue=0.1, 
-                    maxvalue=100.0
-                )
-                if custom_mult is not None:
-                    self.speed_multiplier = custom_mult
-                    # 100ms divided by speed multiplier, clamped to at least 1ms delay
-                    self.snake_update_delay = max(1, int(100 / custom_mult))
-                    label = f"Custom ({custom_mult}x)"
-                else:
-                    # Cancelled, fallback to Normal
-                    self.speed_multiplier = 1
-                    self.snake_update_delay = 100
-                    label = "Normal (1x)"
-            except Exception:
-                # Fallback if tkinter fails
-                self.speed_multiplier = 1
-                self.snake_update_delay = 100
-                label = "Normal (1x)"
-            finally:
-                root.destroy()
+            self.state = STATE_SPEED_INPUT
+            self.custom_speed_str = ""
         else:
             speeds = {
                 1: (2, "Fast (2x)", 50),
@@ -209,10 +270,10 @@ class Game:
             }
             next_mult, label, delay = speeds.get(self.speed_multiplier, (1, "Normal (1x)", 100))
             self.speed_multiplier = next_mult
-            self.snake_update_delay = delay
+            self.base_update_delay = delay
             
-        # Update menu button text
-        self.menu.update_speed_button_text(f"4. Speed: {label}")
+            # Update menu button text
+            self.menu.update_speed_button_text(f"4. Speed: {label}")
 
     def trigger_game_over(self):
         """Sets state to game over and records the start timestamp."""
@@ -224,8 +285,8 @@ class Game:
             self.high_score = self.snake.score
             self.save_high_score()
             
-        # Stop webcam to release hardware
-        self.gesture_controller.stop()
+        # We do not stop the webcam here to prevent issues when the player rapidly restarts.
+        # It will be stopped gracefully if returning to the main menu.
 
     def update(self):
         """Updates game state logic."""
@@ -239,7 +300,7 @@ class Game:
                     self.snake.set_direction(gesture_dir)
                     
             # 2. Decouple movement logic using timer
-            if current_time - self.last_update_time >= self.snake_update_delay:
+            if current_time - self.last_update_time >= self.current_update_delay:
                 self.last_update_time = current_time
                 
                 # In Auto AI Mode, run pathfinding before moving
@@ -267,6 +328,7 @@ class Game:
                     self.snake.body[0][0] + self.snake.next_direction[0],
                     self.snake.body[0][1] + self.snake.next_direction[1]
                 )
+                
                 eating = (next_head == self.food.position)
                 
                 # Perform physical move
@@ -274,18 +336,31 @@ class Game:
                 
                 # If food was eaten, spawn new food
                 if eating:
+                    self.snd_eat.play()
+                    self.spawn_particles(self.food.position, (255, 100, 100), count=20)
                     self.food.randomize_position(self.snake.body)
-                    self.current_path = []
-                    
+                    # Speed up slightly as snake gets longer (capped at minimum delay)
+                    self.current_update_delay = max(MIN_UPDATE_DELAY, int(self.current_update_delay * SPEED_DECAY_FACTOR))
+                
                 # Check collisions (death)
                 if self.snake.check_collision():
-                    self.trigger_game_over()
+                    self.snd_die.play()
+                    self.state = STATE_DYING
+                    self.death_anim_start = time.time()
+                    
+            # 3. Update particle physics every frame
+            self.update_particles()
+            
+        elif self.state == STATE_DYING:
+            self.update_particles()
+            if time.time() - self.death_anim_start >= 1.0:
+                self.trigger_game_over()
                     
         elif self.state == STATE_GAMEOVER:
-            # 5-second countdown logic returning to menu
+            # 5-second countdown logic restarting the game
             elapsed = time.time() - self.game_over_start_time
             if elapsed >= self.game_over_duration:
-                self.state = STATE_MENU
+                self.start_game(self.mode)
 
     def draw(self):
         """Renders graphics onto the window."""
@@ -293,8 +368,28 @@ class Game:
         self.screen.fill(COLOR_BG)
         
         # 2. Render contents based on state
-        if self.state == STATE_MENU:
-            self.menu.draw_main_menu(self.screen)
+        logical_mouse = self.get_logical_mouse_pos(pygame.mouse.get_pos())
+        
+        if self.state == STATE_MENU or self.state == STATE_SPEED_INPUT:
+            self.menu.draw_main_menu(self.screen, logical_mouse)
+            
+            if self.state == STATE_SPEED_INPUT:
+                overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+                overlay.fill((0, 0, 0, 200))
+                self.screen.blit(overlay, (0, 0))
+                
+                prompt = self.sidebar_title_font.render("Enter Custom Speed Multiplier:", True, COLOR_TEXT_PRIMARY)
+                prompt_rect = prompt.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 40))
+                self.screen.blit(prompt, prompt_rect)
+                
+                val_surf = self.sidebar_title_font.render(self.custom_speed_str + "_", True, COLOR_ACCENT)
+                val_rect = val_surf.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 20))
+                self.screen.blit(val_surf, val_rect)
+                
+                hint = self.sidebar_small_font.render("Press ENTER to confirm, ESC to cancel", True, COLOR_TEXT_SECONDARY)
+                hint_rect = hint.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 80))
+                self.screen.blit(hint, hint_rect)
+                
         else:
             # Playing or Game Over - Draw grid board and sidebar HUD
             self.draw_game_board()
@@ -306,8 +401,26 @@ class Game:
                 
             # Draw Entities
             self.food.draw(self.screen)
-            self.snake.draw(self.screen)
             
+            if self.state != STATE_DYING or (int((time.time() - self.death_anim_start) * 10) % 2 == 0):
+                self.snake.draw(self.screen)
+                
+            self.draw_particles()
+            
+            if self.state == STATE_PAUSED:
+                overlay = pygame.Surface((GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE), pygame.SRCALPHA)
+                overlay.fill((0, 0, 0, 150))
+                self.screen.blit(overlay, (GRID_X_OFFSET, GRID_Y_OFFSET))
+                pause_text = self.sidebar_title_font.render("PAUSED - Press P to resume", True, COLOR_TEXT_PRIMARY)
+                text_rect = pause_text.get_rect(center=(GRID_X_OFFSET + GRID_COLS * CELL_SIZE // 2, GRID_Y_OFFSET + GRID_ROWS * CELL_SIZE // 2))
+                self.screen.blit(pause_text, text_rect)
+                
+            if self.state == STATE_DYING:
+                flash_surf = pygame.Surface((GRID_COLS * CELL_SIZE, GRID_ROWS * CELL_SIZE), pygame.SRCALPHA)
+                alpha = max(0, 255 - int((time.time() - self.death_anim_start) * 510))
+                flash_surf.fill((255, 0, 0, alpha))
+                self.screen.blit(flash_surf, (GRID_X_OFFSET, GRID_Y_OFFSET))
+                
             # If Game Over, draw overlay on top
             if self.state == STATE_GAMEOVER:
                 elapsed = time.time() - self.game_over_start_time
@@ -317,9 +430,22 @@ class Game:
                     self.snake.score, 
                     self.high_score, 
                     time_left, 
-                    self.game_over_duration
+                    self.game_over_duration,
+                    logical_mouse
                 )
                 
+        # Calculate uniform scaling to maintain aspect ratio (prevent stretching)
+        self._update_scale_params()
+        scale, scaled_w, scaled_h, offset_x, offset_y = self.cached_scale_params
+        
+        scaled_surf = pygame.transform.smoothscale(self.screen, (scaled_w, scaled_h))
+        
+        # Fill the real screen with the background color to seamlessly blend the "bars"
+        self.real_screen.fill(COLOR_BG)
+        
+        # Blit the centered, properly scaled game
+        self.real_screen.blit(scaled_surf, (offset_x, offset_y))
+        
         pygame.display.flip()
 
     def draw_game_board(self):
@@ -360,30 +486,28 @@ class Game:
         # Draw lines connecting centers of cells along the path
         points = []
         for col, row in self.current_path:
-            x = GRID_X_OFFSET + col * CELL_SIZE + CELL_SIZE // 2
-            y = GRID_Y_OFFSET + row * CELL_SIZE + CELL_SIZE // 2
+            x = col * CELL_SIZE + CELL_SIZE // 2
+            y = row * CELL_SIZE + CELL_SIZE // 2
             points.append((x, y))
             
-        # Draw translucent thick path background
-        # Note: Pygame doesn't support thickness with alpha directly on draw.lines.
-        # We can draw multiple small alpha circles on a scratch surface and blit it!
-        overlay_surf = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+        # Clear translucent thick path background
+        self.overlay_surf.fill((0, 0, 0, 0))
         
         # Draw circles at path nodes
         for pt in points[1:-1]:  # exclude head and food nodes for cleaner look
-            pygame.draw.circle(overlay_surf, (*COLOR_PATH, COLOR_PATH_ALPHA), pt, 4)
+            pygame.draw.circle(self.overlay_surf, (*COLOR_PATH, COLOR_PATH_ALPHA), pt, 4)
             
         # Draw lines between consecutive path points
         for i in range(len(points) - 1):
             pygame.draw.line(
-                overlay_surf, 
+                self.overlay_surf, 
                 (*COLOR_PATH, COLOR_PATH_ALPHA // 2), 
                 points[i], 
                 points[i+1], 
                 width=3
             )
             
-        self.screen.blit(overlay_surf, (0, 0))
+        self.screen.blit(self.overlay_surf, (GRID_X_OFFSET, GRID_Y_OFFSET))
 
     def draw_sidebar(self):
         """Draws the sidebar containing mode status, score cards, and webcam feed."""
@@ -433,6 +557,13 @@ class Game:
         hs_val = self.sidebar_body_font.render(str(self.high_score), True, COLOR_TEXT_PRIMARY)
         self.screen.blit(hs_val, (SIDEBAR_X + 20, SIDEBAR_Y + 210))
         
+        # Snake Length
+        len_label = self.sidebar_small_font.render("LENGTH", True, COLOR_TEXT_SECONDARY)
+        self.screen.blit(len_label, (SIDEBAR_X + 150, SIDEBAR_Y + 190))
+        
+        len_val = self.sidebar_body_font.render(str(len(self.snake.body)), True, COLOR_TEXT_PRIMARY)
+        self.screen.blit(len_val, (SIDEBAR_X + 150, SIDEBAR_Y + 210))
+        
         # Divider
         pygame.draw.line(
             self.screen, 
@@ -480,10 +611,35 @@ class Game:
         guide_texts = {
             MODE_KEYBOARD: ["- [Arrow Keys] or [WASD]", "  to change direction", "- [ESC] to return to menu"],
             MODE_GESTURE: ["- Point index finger to steer", "- AI Assist takes over when", "  no hand/pointing is active", "- [ESC] to return to menu"],
-            MODE_AUTO: ["- Bot playing automatically", "- Uses Breadth-First Search", "- [ESC] to return to menu"]
+            MODE_AUTO: ["- Bot playing automatically", "- Uses A* + Hamiltonian Cycle", "- [ESC] to return to menu"]
         }
         
         lines = guide_texts.get(self.mode, [])
         for i, line in enumerate(lines):
             line_surf = self.sidebar_small_font.render(line, True, COLOR_TEXT_PRIMARY)
             self.screen.blit(line_surf, (SIDEBAR_X + 20, guide_y + 16 + i * 16))
+
+    def spawn_particles(self, pos, color, count=15):
+        """Spawns explosion particles at the given grid position."""
+        x = GRID_X_OFFSET + pos[0] * CELL_SIZE + CELL_SIZE // 2
+        y = GRID_Y_OFFSET + pos[1] * CELL_SIZE + CELL_SIZE // 2
+        for _ in range(count):
+            dx = random.uniform(-4, 4)
+            dy = random.uniform(-4, 4)
+            life = random.randint(15, 30)
+            self.particles.append([x, y, dx, dy, life, color])
+            
+    def update_particles(self):
+        """Updates particle physics."""
+        for p in self.particles:
+            p[0] += p[2]
+            p[1] += p[3]
+            p[4] -= 1
+        self.particles = [p for p in self.particles if p[4] > 0]
+                
+    def draw_particles(self):
+        """Draws particles onto the main screen."""
+        for p in self.particles:
+            x, y, dx, dy, life, color = p
+            size = max(1, int(4 * (life / 30)))
+            pygame.draw.circle(self.screen, color, (int(x), int(y)), size)

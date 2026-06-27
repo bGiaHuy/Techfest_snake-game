@@ -16,7 +16,8 @@ except ImportError:
 
 from src.config import (
     WEBCAM_PREVIEW_WIDTH, WEBCAM_PREVIEW_HEIGHT,
-    COLOR_SIDEBAR_BG, COLOR_TEXT_SECONDARY, get_font
+    COLOR_SIDEBAR_BG, COLOR_TEXT_SECONDARY, get_font,
+    FINGER_EXTEND_RATIO
 )
 
 # Standard Hand Skeleton Connections
@@ -37,6 +38,7 @@ class GestureController:
         self.thread = None
         self.lock = threading.Lock()
         self.error_message = "Initializing..."
+        self.fallback_font = get_font(14)
         
         if not OPENCV_AVAILABLE:
             self.error_message = "OpenCV/MediaPipe not installed"
@@ -78,15 +80,17 @@ class GestureController:
         pygame.draw.rect(fallback, (50, 58, 86), fallback.get_rect(), 2)
         
         # Render error text
-        font = get_font(14)
-        text_surf = font.render(self.error_message, True, COLOR_TEXT_SECONDARY)
+        text_surf = self.fallback_font.render(self.error_message, True, COLOR_TEXT_SECONDARY)
         text_rect = text_surf.get_rect(center=(WEBCAM_PREVIEW_WIDTH // 2, WEBCAM_PREVIEW_HEIGHT // 2))
         fallback.blit(text_surf, text_rect)
         return fallback
 
     def _camera_loop(self):
         """Background camera frame acquisition and MediaPipe hand detection."""
-        cap = cv2.VideoCapture(0)
+        # Use DirectShow on Windows for better exposure, no MSMF lag, and explicit 4:3 resolution
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         
         if not cap.isOpened():
             with self.lock:
@@ -188,8 +192,8 @@ class GestureController:
                     tip_pt = (int(index_tip.x * w), int(index_tip.y * h))
                     cv2.line(rgb_frame, mcp_pt, tip_pt, (255, 170, 0), 4)
 
-                    # Only register direction if index finger is extended (ratio >= 0.45)
-                    if ratio >= 0.45:
+                    # Only register direction if index finger is extended
+                    if ratio >= FINGER_EXTEND_RATIO:
                         if abs(dx) > abs(dy):
                             # Horizontal movement
                             detected_dir = (1, 0) if dx > 0 else (-1, 0)

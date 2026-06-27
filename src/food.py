@@ -6,16 +6,15 @@ class Food:
     def __init__(self):
         self.position = (0, 0)
         self.respawn_count = 0  # To track stats or trigger animations
+        self.all_positions = {(x, y) for x in range(GRID_COLS) for y in range(GRID_ROWS)}
         
     def randomize_position(self, snake_body):
         """
         Positions the food at a random grid square not occupied by the snake.
         """
-        while True:
-            pos = (random.randint(0, GRID_COLS - 1), random.randint(0, GRID_ROWS - 1))
-            if pos not in snake_body:
-                self.position = pos
-                break
+        available = list(self.all_positions - set(snake_body))
+        if available:
+            self.position = random.choice(available)
         self.respawn_count += 1
 
     def draw(self, screen):
@@ -35,8 +34,13 @@ class Food:
         glow_surf = pygame.Surface((CELL_SIZE * 2, CELL_SIZE * 2), pygame.SRCALPHA)
         
         # Center of glow_surf is (CELL_SIZE, CELL_SIZE)
-        pygame.draw.circle(glow_surf, (*glow_color, 40), (CELL_SIZE, CELL_SIZE), CELL_SIZE * 0.9)
-        pygame.draw.circle(glow_surf, (*glow_color, 90), (CELL_SIZE, CELL_SIZE), CELL_SIZE * 0.6)
+        import time, math
+        pulse = (math.sin(time.time() * 6) + 1) / 2 # 0 to 1
+        glow_radius_1 = CELL_SIZE * (0.8 + 0.2 * pulse)
+        glow_radius_2 = CELL_SIZE * (0.5 + 0.2 * pulse)
+        
+        pygame.draw.circle(glow_surf, (*glow_color, 40), (CELL_SIZE, CELL_SIZE), glow_radius_1)
+        pygame.draw.circle(glow_surf, (*glow_color, 90), (CELL_SIZE, CELL_SIZE), glow_radius_2)
         screen.blit(glow_surf, (center_x - CELL_SIZE, center_y - CELL_SIZE))
         
         # Core solid food circle

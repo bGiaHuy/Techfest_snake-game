@@ -1,3 +1,5 @@
+import heapq
+import itertools
 from collections import deque
 from src.config import GRID_COLS, GRID_ROWS
 
@@ -46,37 +48,51 @@ def get_valid_neighbors(pos, snake_body):
                 
     return neighbors
 
+def heuristic(a, b):
+    # Manhattan distance heuristic
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
 def find_shortest_path(start, target, snake_body):
     """
-    Runs a Breadth-First Search (BFS) to find the shortest path from start to target.
+    Runs A* (A-Star) search to find the shortest path from start to target.
     Returns:
         List of (x, y) coordinates from start to target (inclusive), or None if no path exists.
     """
     if start == target:
         return [start]
         
-    queue = deque([[start]])
-    visited = {start}
+    # Priority queue stores tuples of (f_score, counter, current_node)
+    counter = itertools.count()
+    queue = []
+    heapq.heappush(queue, (0, next(counter), start))
     
+    came_from = {}
+    g_score = {start: 0}
     body_set = set(snake_body[:-1])
     
     while queue:
-        path = queue.popleft()
-        current = path[-1]
+        _, _, current = heapq.heappop(queue)
         
         if current == target:
+            path = [current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            path.reverse()
             return path
             
         for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
             neighbor = (current[0] + dx, current[1] + dy)
             
             if 0 <= neighbor[0] < GRID_COLS and 0 <= neighbor[1] < GRID_ROWS:
-                if neighbor not in visited and neighbor not in body_set:
-                    visited.add(neighbor)
-                    new_path = list(path)
-                    new_path.append(neighbor)
-                    queue.append(new_path)
-                    
+                if neighbor not in body_set:
+                    tentative_g_score = g_score[current] + 1
+                    if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
+                        came_from[neighbor] = current
+                        g_score[neighbor] = tentative_g_score
+                        f_score = tentative_g_score + heuristic(neighbor, target)
+                        heapq.heappush(queue, (f_score, next(counter), neighbor))
+                        
     return None
 
 def count_reachable_cells(start, snake_body):
